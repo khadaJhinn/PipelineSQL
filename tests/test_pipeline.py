@@ -4,17 +4,15 @@ import os
 import sqlite3
 import subprocess
 import sys
-from dataclasses import replace
 from datetime import date
 
-import httpx
 import pandas as pd
 import pytest
 
-from scripts.config import Settings
+from scripts.archive import iter_records
 from scripts.ingest.rte import ingest
 from scripts.load.sqlite import load_processed
-from scripts.transform.clean import read_archive, transform_archive
+from scripts.transform.clean import transform_archive
 
 
 def test_cli_help_works_with_windows_console_encoding():
@@ -28,7 +26,7 @@ def test_cli_help_works_with_windows_console_encoding():
     assert "Pipeline RTE" in result.stdout.decode("cp1252")
 
 
-async def test_end_to_end_and_raw_is_never_modified(tmp_path):
+async def test_end_to_end_and_raw_is_never_modified(tmp_path, api):
     rows = [
         {
             "perimetre": "France",
@@ -42,13 +40,9 @@ async def test_end_to_end_and_raw_is_never_modified(tmp_path):
             "prevision_j1": 41000,
         },
     ]
-    settings = replace(Settings(), data_dir=tmp_path, database=tmp_path / "test.sqlite")
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"total_count": 2, "results": rows})
-        )
-    ) as client:
-        raw = await ingest(settings, date(2026, 10, 1), date(2026, 10, 2), client=client)
+    settings = api.settings
+    api.respond({"total_count": 2, "results": rows})
+    raw = await ingest(settings, date(2026, 10, 1), date(2026, 10, 2))
     before = {file.name: hashlib.sha256(file.read_bytes()).hexdigest() for file in raw.iterdir()}
     processed = transform_archive(raw, tmp_path / "processed")
     excel = load_processed(processed, settings.database)
@@ -63,7 +57,7 @@ async def test_end_to_end_and_raw_is_never_modified(tmp_path):
         ).fetchone() == (40000,)
     quality = json.loads((processed / "quality.json").read_text())
     assert quality["unmeasured_rows"] == 1
-    page = next(raw.glob("2026*.json"))
+    page = next(raw.glob("2026*.jsonl"))
     page.write_bytes(b"{}")
     with pytest.raises(ValueError, match="modifiée"):
-        read_archive(raw)
+        list(iter_records(raw))
