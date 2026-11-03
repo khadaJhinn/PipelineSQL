@@ -41,6 +41,8 @@ def test_all_seven_analyses_and_real_explain_analyze(tmp_path):
     assert benchmark["before"]["rows"] == benchmark["after"]["rows"] == 1
     assert benchmark["before"]["median_ms"] > 0
     assert "Total Time" in benchmark["after"]["plan"]
+    assert benchmark["index_scan_selected"]
+    assert benchmark["after"]["matched_rows"] == 1
     with (report_path.parent / "statistiques_journalieres.csv").open(
         encoding="utf-8-sig", newline=""
     ) as source:

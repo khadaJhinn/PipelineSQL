@@ -14,8 +14,8 @@ from scripts.metrics import measure
 
 INDEX_NAME = "idx_consommation_mw"
 INDEX_QUERY = (
-    "SELECT date_heure_utc, consommation_mw FROM electricity_consumption "
-    "WHERE consommation_mw = ? ORDER BY date_heure_utc LIMIT 100"
+    "SELECT COUNT(*), MIN(date_heure_utc), MAX(date_heure_utc) "
+    "FROM electricity_consumption WHERE consommation_mw = ?"
 )
 
 
@@ -43,12 +43,17 @@ def index_benchmark(connection, repetitions: int = 31) -> dict:
             times.append((perf_counter() - started) * 1000)
             if actual != expected:
                 raise ValueError("Résultats SQL non déterministes pendant le benchmark.")
-        return {"median_ms": median(times), "plan": plan, "rows": len(expected)}, expected
+        return {
+            "median_ms": median(times),
+            "plan": plan,
+            "rows": len(expected),
+            "matched_rows": expected[0][0],
+        }, expected
 
     # Cet index est créé par ce projet. Les autres index ne sont jamais modifiés.
     connection.execute(f"DROP INDEX IF EXISTS {INDEX_NAME}")
     before, expected = profile()
-    connection.execute(f"CREATE INDEX {INDEX_NAME} ON electricity_consumption(consommation_mw)")
+    connection.execute((ROOT / "sql/002_indexes.sql").read_text(encoding="utf-8"))
     after, actual = profile()
     if expected != actual:
         raise ValueError("L'index a changé les résultats.")

@@ -86,3 +86,12 @@ def test_tampered_parquet_is_rejected_on_replay(tmp_path):
     (output / "consommation.parquet").write_bytes(b"changed")
     with pytest.raises(ValueError, match="Parquet"):
         transform_archive(raw, tmp_path / "processed", 1)
+
+
+def test_negative_zero_and_zero_are_identical_across_batches(tmp_path):
+    value = rows(1)[0]
+    raw = archive(tmp_path, [{**value, "solaire": -0.0}, {**value, "solaire": 0}])
+    output = transform_archive(raw, tmp_path / "processed", batch_size=1)
+    quality = json.loads((output / "quality.json").read_text())
+    assert quality["clean_rows"] == 1
+    assert quality["duplicate_rows"] == 1

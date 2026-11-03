@@ -64,7 +64,7 @@ def number(value, field: str) -> float | None:
         raise ValueError(f"Valeur numérique invalide pour {field} : {value!r}.") from exc
     if not math.isfinite(result):
         raise ValueError(f"Valeur non finie pour {field}.")
-    return result
+    return 0.0 if result == 0 else result
 
 
 def transform_records(
