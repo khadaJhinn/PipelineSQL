@@ -52,6 +52,44 @@ async def test_retry_on_rate_limit(monkeypatch, api):
     assert calls == [1]
 
 
+async def test_retry_exhaustion_has_exponential_waits(monkeypatch, api):
+    waits = []
+
+    async def no_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("scripts.ingest.rte.asyncio.sleep", no_sleep)
+    for _ in range(4):
+        api.respond(status=503)
+    async with aiohttp.ClientSession() as client:
+        with pytest.raises(aiohttp.ClientResponseError):
+            await RteClient(replace(api.settings, retries=3), client).request({})
+    assert waits == [1, 2, 4]
+    assert len(api.requests) == 4
+
+
+async def test_network_timeout_is_retried(monkeypatch, api):
+    real_sleep = asyncio.sleep
+    waits = []
+
+    async def handler(request):
+        await real_sleep(0.15)
+        return web.json_response({"results": []})
+
+    async def no_sleep(seconds):
+        waits.append(seconds)
+
+    api.handler = handler
+    monkeypatch.setattr("scripts.ingest.rte.asyncio.sleep", no_sleep)
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=2, sock_read=0.05)
+    ) as client:
+        with pytest.raises(TimeoutError):
+            await RteClient(replace(api.settings, retries=1), client).request({})
+    assert waits == [1]
+    assert len(api.requests) == 2
+
+
 async def test_interruption_resumes_without_redownloading_saved_page(api):
     api.respond({"total_count": 101, "results": [{"consommation": 42}] * 100})
     api.respond(status=503)

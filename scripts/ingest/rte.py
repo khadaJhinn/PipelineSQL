@@ -14,6 +14,7 @@ from filelock import FileLock
 from scripts.archive import file_hash, iter_records, read_manifest
 from scripts.config import Settings
 from scripts.excel import write_records_excel
+from scripts.files import atomic_json
 
 LOGGER = logging.getLogger(__name__)
 PARIS = ZoneInfo("Europe/Paris")
@@ -27,9 +28,7 @@ def day_bounds(day: date) -> tuple[str, str]:
 
 
 def save_state(path: Path, state: dict) -> None:
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    atomic_json(path, state)
 
 
 class RteClient:
