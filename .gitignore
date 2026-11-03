@@ -11,4 +11,8 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 data/electricity.sqlite*
+data/*.duckdb*
+data/checkpoints/
+data/reports/
+data/publish/
 data/hub/

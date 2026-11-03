@@ -1,6 +1,5 @@
 """Mesures nationales validées, unités explicites, UTC et heure française."""
 
-import hashlib
 import json
 import math
 from datetime import UTC, datetime
@@ -8,6 +7,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+from scripts.archive import iter_records, read_manifest
 
 METRICS = {
     "consommation": "consommation_mw",
@@ -113,24 +114,8 @@ def transform_records(records: list[dict], dataset: str) -> tuple[pd.DataFrame, 
 
 
 def read_archive(run_dir: Path) -> tuple[list[dict], dict]:
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("status") != "complete":
-        raise ValueError("Une archive incomplète ne peut pas être transformée.")
-    records = []
-    for page in manifest["pages"]:
-        path = (run_dir / page["file"]).resolve()
-        if path.parent != run_dir.resolve():
-            raise ValueError("Chemin de page hors de l'archive.")
-        content = path.read_bytes()
-        if hashlib.sha256(content).hexdigest() != page["sha256"]:
-            raise ValueError(f"Archive brute modifiée : {path.name}.")
-        rows = json.loads(content)["results"]
-        if len(rows) != page["rows"]:
-            raise ValueError("Nombre de lignes incohérent avec le manifeste.")
-        records.extend(rows)
-    if len(records) != manifest["raw_rows"]:
-        raise ValueError("Archive incomplète : nombre de lignes incohérent.")
-    return records, manifest
+    manifest = read_manifest(run_dir)
+    return list(iter_records(run_dir, manifest)), manifest
 
 
 def transform_archive(run_dir: Path, processed_root: Path) -> Path:

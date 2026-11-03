@@ -9,7 +9,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import httpx
+import aiohttp
 
 from scripts.config import Settings
 from scripts.ingest.rte import ingest
@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--days", type=int, default=7, help="Défaut : 7 derniers jours mesurés"
         )
+        command.add_argument("--refresh", action="store_true", help="Créer un nouveau snapshot")
+        command.add_argument("--resume", type=Path, help="Reprendre un checkpoint JSON")
     clean = commands.add_parser("transform", help="Nettoyer une archive existante")
     clean.add_argument("--raw", type=Path, required=True, help="Dossier raw d'une exécution")
     load = commands.add_parser("load", help="Charger un Parquet existant et exporter depuis SQL")
@@ -43,7 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = build_parser()
     arguments = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(arguments or ["run"])
@@ -51,7 +52,16 @@ def main(argv: list[str] | None = None) -> None:
     result = {}
     try:
         if args.command in ("run", "ingest"):
-            raw = asyncio.run(ingest(settings, args.start, args.end, args.days))
+            raw = asyncio.run(
+                ingest(
+                    settings,
+                    args.start,
+                    args.end,
+                    args.days,
+                    refresh=args.refresh,
+                    resume=args.resume,
+                )
+            )
             result["raw"] = str(raw)
             result["raw_excel"] = str(raw / "brut.xlsx")
         if args.command in ("run", "transform"):
@@ -64,7 +74,7 @@ def main(argv: list[str] | None = None) -> None:
             database = (args.database or settings.database).resolve()
             result["sql_excel"] = str(load_processed(processed, database))
             result["database"] = str(database)
-    except (ValueError, OSError, httpx.HTTPError, sqlite3.Error, KeyError) as exc:
+    except (ValueError, OSError, aiohttp.ClientError, TimeoutError, sqlite3.Error, KeyError) as exc:
         parser.exit(1, f"Échec du pipeline : {exc}\n")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
