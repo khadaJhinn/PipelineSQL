@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from dataclasses import replace
@@ -67,3 +68,53 @@ def test_french_day_includes_dst_change():
     start, end = day_bounds(date(2026, 10, 25))
     assert start == "2026-10-24T22:00:00+00:00"
     assert end == "2026-10-25T23:00:00+00:00"
+
+
+async def test_days_are_concurrent_with_a_bounded_number_of_requests(tmp_path):
+    active = 0
+    maximum = 0
+
+    async def handler(request):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return httpx.Response(200, json={"total_count": 1, "results": [{"consommation": 42}]})
+
+    settings = replace(Settings(), data_dir=tmp_path, concurrency=2)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await ingest(settings, date(2026, 10, 1), date(2026, 10, 6), client=client)
+    assert maximum == 2
+
+
+async def test_changed_total_during_pagination_fails(tmp_path):
+    def handler(request):
+        offset = int(request.url.params["offset"])
+        total = 101 if offset == 0 else 102
+        rows = [{"consommation": 42}] * (100 if offset == 0 else 2)
+        return httpx.Response(200, json={"total_count": total, "results": rows})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="changé"):
+            await ingest(
+                replace(Settings(), data_dir=tmp_path),
+                date(2026, 10, 1),
+                date(2026, 10, 2),
+                client=client,
+            )
+    manifest = next(tmp_path.glob("raw/*/manifest.json"))
+    assert json.loads(manifest.read_text())["status"] == "failed"
+
+
+async def test_repeated_collection_creates_separate_immutable_archives(tmp_path):
+    settings = replace(Settings(), data_dir=tmp_path)
+    response = {"total_count": 1, "results": [{"consommation": 42}]}
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=response))
+    ) as client:
+        first = await ingest(settings, date(2026, 10, 1), date(2026, 10, 2), client=client)
+        original = {path.name: path.read_bytes() for path in first.iterdir()}
+        second = await ingest(settings, date(2026, 10, 1), date(2026, 10, 2), client=client)
+    assert first != second
+    assert original == {path.name: path.read_bytes() for path in first.iterdir()}

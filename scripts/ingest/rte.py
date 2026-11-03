@@ -93,6 +93,8 @@ class RteClient:
             expected_total = total
             if total > 10_000:
                 raise ValueError("Plus de 10 000 lignes sur un jour : pagination non supportée.")
+            if len(rows) > PAGE_SIZE or params["offset"] + len(rows) > total:
+                raise ValueError("Pagination incohérente : trop de lignes retournées.")
             name = f"{day.isoformat()}_{params['offset']:05d}.json"
             # Le corps JSON reste inchangé ; chaque archive est créée une seule fois.
             with (run_dir / name).open("xb") as output:
