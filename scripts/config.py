@@ -26,8 +26,11 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         load_dotenv(ROOT / ".env")
-        database = Path(os.getenv("DATABASE_PATH", "data/electricity.duckdb"))
+        data_dir = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
+        data_dir = data_dir if data_dir.is_absolute() else ROOT / data_dir
+        database = Path(os.getenv("DATABASE_PATH", str(data_dir / "electricity.duckdb")))
         return cls(
+            data_dir=data_dir,
             database=database if database.is_absolute() else ROOT / database,
             api_base=os.getenv("RTE_API_BASE", cls.api_base),
             dataset=os.getenv("RTE_DATASET", cls.dataset),

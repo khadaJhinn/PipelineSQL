@@ -6,13 +6,4 @@ __pycache__/
 .env
 .env.*
 !.env.example
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
-data/electricity.sqlite*
-data/*.duckdb*
-data/checkpoints/
-data/reports/
-data/publish/
-data/hub/
+data/

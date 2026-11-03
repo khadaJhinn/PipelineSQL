@@ -1,9 +1,11 @@
+import asyncio
 import hashlib
 import json
 import os
 import subprocess
 import sys
 from datetime import date
+from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -61,3 +63,49 @@ async def test_end_to_end_and_raw_is_never_modified(tmp_path, api):
     page.write_bytes(b"{}")
     with pytest.raises(ValueError, match="modifiée"):
         list(iter_records(raw))
+
+
+async def test_actual_cli_run_uses_configured_data_directory_and_produces_reports(api, tmp_path):
+    api.respond(
+        {
+            "total_count": 1,
+            "results": [
+                {
+                    "perimetre": "France",
+                    "date_heure": "2026-10-01T00:00:00+00:00",
+                    "consommation": 40000,
+                }
+            ],
+        }
+    )
+    environment = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "DATA_DIR": str(tmp_path / "cli"),
+        "DATABASE_PATH": str(tmp_path / "cli/test.duckdb"),
+        "RTE_API_BASE": api.settings.api_base,
+    }
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "app.py",
+        "run",
+        "--start",
+        "2026-10-01",
+        "--end",
+        "2026-10-02",
+        "--batch-size",
+        "1",
+        env=environment,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    assert process.returncode == 0, stderr.decode("utf-8")
+    result = json.loads(stdout)
+    report = json.loads(Path(result["pipeline_report"]).read_text(encoding="utf-8"))
+    assert report["clean_rows"] == 1
+    assert report["transformation_reused"] is False
+    assert report["parquet_batch_size"] == 1
+    assert Path(result["database"]).is_relative_to(tmp_path)
+    analysis = json.loads(Path(result["analysis_report"]).read_text(encoding="utf-8"))
+    assert len(analysis["queries"]) == 7
