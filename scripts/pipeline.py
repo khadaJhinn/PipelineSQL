@@ -11,6 +11,7 @@ from pathlib import Path
 import aiohttp
 import duckdb
 
+from scripts.analyze import analyze
 from scripts.config import Settings
 from scripts.ingest.rte import ingest
 from scripts.load.database import load_processed
@@ -38,9 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument("--raw", type=Path, required=True, help="Dossier raw d'une exécution")
     load = commands.add_parser("load", help="Charger un Parquet existant et exporter depuis SQL")
     load.add_argument("--processed", type=Path, required=True)
-    for command in (run, load):
+    analysis = commands.add_parser("analyze", help="Exécuter les analyses SQL et mesurer l'index")
+    analysis.add_argument("--output", type=Path, help="Dossier de rapports")
+    for command in (run, load, analysis):
         command.add_argument("--database", type=Path, help="Chemin DuckDB (défaut : configuration)")
-    for command in (run, clean, load):
+    for command in (run, clean, load, analysis):
         command.add_argument("--batch-size", type=int, help="Lignes par lot (défaut : 1000)")
     return parser
 
@@ -80,6 +83,16 @@ def main(argv: list[str] | None = None) -> None:
                 load_processed(processed, database, args.batch_size or settings.batch_size)
             )
             result["database"] = str(database)
+        if args.command in ("run", "analyze"):
+            database = (args.database or settings.database).resolve()
+            output = (
+                settings.data_dir / "reports" / processed.name
+                if args.command == "run"
+                else args.output or settings.data_dir / "reports/latest"
+            )
+            result["analysis_report"] = str(
+                analyze(database, output, args.batch_size or settings.batch_size)
+            )
     except (ValueError, OSError, aiohttp.ClientError, TimeoutError, duckdb.Error, KeyError) as exc:
         parser.exit(1, f"Échec du pipeline : {exc}\n")
     print(json.dumps(result, ensure_ascii=False, indent=2))
