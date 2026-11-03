@@ -10,184 +10,273 @@ tags:
 
 # Consommation électrique en France — RTE
 
-Pipeline Python : API publique éCO2mix → Excel brut + JSON immuable →
-transformation → Parquet → SQLite → Excel relu depuis SQL.
+Pipeline reproductible : **API RTE → JSON Lines et Excel brut → transformation par
+lots → Parquet → base SQL DuckDB → Excel relu depuis SQL → analyses SQL**.
 
-La publication sur Hugging Face est reportée à ta demande. Aucun envoi vers ce Hub
-n'est effectué et aucun token Hugging Face n'est nécessaire.
+La publication sur Hugging Face est réalisée **manuellement**, selon le choix retenu
+pour ce projet. Le programme prépare les fichiers à déposer. Le périmètre retenu
+couvre le rendu technique, sans oral.
 
 Source : [RTE / ODRÉ, éCO2mix national temps réel](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/).
-Les puissances sont exprimées en MW. Les données temps réel sont provisoires.
-Réutilisation sous Licence Ouverte 2.0 avec attribution à RTE.
+Les données sources sont sous Licence Ouverte 2.0 / Etalab, avec attribution à RTE.
+Les puissances sont en **MW**, les données temps réel sont provisoires.
 
-## Installation
+## Lancer le projet
 
-Python 3.11 ou plus récent.
+Depuis le dossier PipelineSQL, dans PowerShell :
 
 ```powershell
+# Installation initiale ou mise à jour des dépendances après récupération du code.
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env
-```
 
-## Exécuter le pipeline
-
-Depuis la racine du dépôt, récupérer les sept derniers jours disponibles :
-
-```powershell
+# Pipeline complet sur les 7 derniers jours disponibles.
 .venv\Scripts\python app.py run --days 7
 ```
 
-Sans argument, `python app.py` lance également ces sept jours. Le pipeline découvre
-la dernière date contenant une consommation mesurée ; il ne confond pas les dates
-futures de prévision avec les dernières mesures. Le dernier jour peut être incomplet.
-L'API est publique et ne nécessite pas de clé RTE.
+Python 3.11 ou plus récent est nécessaire. Aucune clé d'API n'est nécessaire pour
+cette source publique. Sans argument, `python app.py` lance également sept jours.
+La dernière date est déterminée à partir des consommations mesurées, en excluant
+les prévisions futures sans mesure.
 
-Choisir une période (début inclus, fin **exclue**, dates en Europe/Paris) :
+Les chemins des fichiers sont affichés à la fin. Pour une nouvelle collecte des
+mêmes dates, y compris les corrections RTE, utiliser `--refresh` :
 
 ```powershell
-.venv\Scripts\python app.py run --start 2026-10-28 --end 2026-11-04
+.venv\Scripts\python app.py run --days 60 --batch-size 500 --refresh
 ```
 
-Chaque exécution affiche les chemins des fichiers créés. Elle utilise un nouvel
-identifiant d'archive et ne modifie jamais une archive brute existante.
+Une période explicite utilise des dates françaises, début inclus et fin **exclue** :
+
+```powershell
+.venv\Scripts\python app.py run --start 2026-09-05 --end 2026-11-04
+```
+
+Cette période couvre le 5 septembre au 3 novembre inclus. Le dernier jour peut
+être incomplet. Une période contient au maximum 366 jours, dans la limite des
+données effectivement disponibles dans le jeu temps réel.
+
+## Les fichiers produits
 
 ```text
 PipelineSQL/
-├── app.py
 ├── sql/
 │   ├── 001_schema.sql
+│   ├── 002_indexes.sql
 │   └── analyses.sql
 ├── scripts/
 │   ├── ingest/rte.py
 │   ├── transform/clean.py
-│   ├── load/sqlite.py
+│   ├── load/database.py
+│   ├── publish/prepare.py
+│   ├── analyze.py
 │   └── pipeline.py
-├── data/
-│   ├── raw/<execution>/
-│   │   ├── AAAA-MM-JJ_00000.json
+├── data/                         # Jamais versionné dans Git
+│   ├── raw/<snapshot>/
+│   │   ├── AAAA-MM-JJ_00000.jsonl
 │   │   ├── brut.xlsx
 │   │   └── manifest.json
-│   ├── processed/<execution>/
+│   ├── checkpoints/<identite>.json
+│   ├── processed/<snapshot>/
 │   │   ├── consommation.parquet
 │   │   ├── consommation_sql.xlsx
 │   │   ├── quality.json
-│   │   └── load_report.json
-│   └── electricity.sqlite
+│   │   ├── load_report.json
+│   │   └── pipeline_report.json
+│   ├── reports/<snapshot>/
+│   │   ├── *.csv                 # Résultats des 7 analyses
+│   │   ├── analysis_report.json
+│   │   └── index_explain_analyze.txt
+│   ├── publish/<snapshot>/
+│   │   ├── README.md             # Dataset Card à déposer sur le Hub
+│   │   ├── provenance.json
+│   │   └── data/consommation.parquet
+│   └── electricity.duckdb
 ├── tests/
+├── app.py
 └── README.md
 ```
 
-### Lancer les étapes séparément
+Double-cliquer sur les Excel pour les consulter. Les CSV d'analyse s'ouvrent aussi
+dans Excel. La nouvelle base SQL est `data/electricity.duckdb`, utilisable avec un
+client DuckDB. **L'ancienne base `electricity.sqlite` et les anciennes archives restent
+conservées** ; les nouvelles exécutions utilisent DuckDB, qui permet
+[`EXPLAIN ANALYZE`](https://duckdb.org/docs/current/guides/meta/explain_analyze).
+
+## Ingestion et reprise
+
+La collecte utilise **aiohttp**, un timeout total de 30 secondes et un sémaphore
+limitant la concurrence à quatre requêtes. La pagination traite 100 lignes par page
+sur des fenêtres journalières françaises, y compris aux changements d'heure.
+Les erreurs réseau, timeouts et HTTP 408, 429, 500, 502, 503, 504 sont réessayés
+trois fois avec attente exponentielle. Les autres erreurs HTTP arrêtent la collecte.
+
+Chaque ligne JSONL conserve un enregistrement source complet. `brut.xlsx` contient
+les mêmes enregistrements et tous leurs champs, avant nettoyage métier.
+Les noms de pages sont déterministes : `AAAA-MM-JJ_offset.jsonl`. L'identité du
+snapshot dépend de la source et des dates, avec une génération `v001`, `v002`, etc.
+
+Un checkpoint est écrit atomiquement après chaque page. Les pages déjà reçues et
+leurs empreintes SHA-256 sont vérifiées à la reprise. Pour reprendre une collecte
+interrompue, relancer la même période **sans `--refresh`**, ou fournir son checkpoint :
 
 ```powershell
-.venv\Scripts\python -m scripts.pipeline ingest --days 7
-# Remplacer ID par l'identifiant affiché par la collecte.
-.venv\Scripts\python -m scripts.pipeline transform --raw data/raw/ID
-.venv\Scripts\python -m scripts.pipeline load --processed data/processed/ID
+.venv\Scripts\python app.py run --resume data/checkpoints/IDENTITE.json
 ```
 
-On peut relancer `load` sur le même dossier : les clés SQL empêchent les doublons
-et l'Excel final est régénéré depuis SQL. Pour rejouer une transformation, effectuer
-une nouvelle collecte ; un dossier transformé existant est protégé contre l'écrasement.
-Une archive dont le manifeste indique `failed` ne peut pas être transformée.
+Remplacer `IDENTITE.json` par le fichier présent dans `data/checkpoints/`.
+`--resume` ne se combine pas avec `--start`, `--end` ou `--refresh`.
 
-### Configuration
+Le checkpoint mutable est séparé des fichiers bruts. Le manifeste final est créé
+uniquement après collecte et export Excel complets. Les archives brutes terminées
+ne sont jamais réécrites. Une collecte complète existante est réutilisée ; `--refresh`
+crée une nouvelle génération et conserve l'ancienne. Si le nombre de lignes change
+pendant une pagination, la collecte s'arrête et demande un nouveau snapshot.
 
-| Variable | Valeur par défaut | Rôle |
-| --- | --- | --- |
-| `RTE_API_BASE` | `https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets` | API ODRÉ |
-| `RTE_DATASET` | `eco2mix-national-tr` | Jeu national temps réel |
-| `SQLITE_PATH` | `data/electricity.sqlite` | Fichier de base SQL |
+## Transformation et chargement
 
-Un chemin SQLite relatif dans `.env` est résolu depuis la racine du dépôt.
-L'option `--database chemin.sqlite` permet de choisir une autre base pour `run` ou
-`load` ; ce chemin est relatif au dossier de lancement. SQLite ne demande ni serveur
-ni mot de passe. Les autres moteurs SQL ne sont pas implémentés.
+Les JSONL sont lus par lots (1 000 lignes par défaut). Une base de travail SQLite
+temporaire déduplique et trie les mesures **sur disque**, y compris entre deux lots.
+La sortie Parquet est écrite progressivement avec un schéma Arrow stable et des
+groupes de lignes bornés. La base de travail est supprimée en fin de traitement.
 
-## Collecte et transformation
+Le nettoyage valide le périmètre France, les dates avec fuseau, les nombres finis
+et une consommation positive ou nulle. Les prévisions sans consommation mesurée
+restent dans le brut. Les valeurs manquantes restent nulles, les échanges et le
+pompage conservent leur signe. Les doublons identiques sont supprimés et les
+mesures contradictoires arrêtent la transformation.
 
-La collecte utilise `httpx.AsyncClient`, avec au plus quatre requêtes simultanées,
-des fenêtres journalières et une pagination de 100 lignes. Les erreurs réseau, HTTP
-408, 429, 500, 502, 503 et 504 sont réessayées jusqu'à trois fois avec délai croissant.
-Les autres erreurs HTTP arrêtent l'étape. Chaque période couvre au maximum 366 jours,
-sous réserve de la disponibilité dans le jeu temps réel.
+La production totale additionne les huit filières principales. Les sous-filières
+ne sont pas additionnées de nouveau ; si une filière manque, le total reste nul.
+Les champs sources supplémentaires restent disponibles dans le brut.
 
-Le JSON conserve le corps de réponse reçu. `brut.xlsx` contient les champs de tous
-les enregistrements retournés, sans nettoyage métier. Le JSON constitue la référence
-pour les valeurs et types d'origine, Excel restant un format de consultation.
-Le manifeste conserve l'URL source, la période, la date de collecte, les paramètres,
-le nombre de lignes et les empreintes SHA-256 des pages. Ces empreintes sont vérifiées
-avant transformation. Les fichiers bruts ne sont jamais réécrits par le pipeline.
+Le chargement DuckDB lit les groupes Parquet par lots, dans une transaction unique.
+La clé primaire `(date_heure_utc, perimetre)` empêche les doublons. Les révisions
+récentes mettent les mesures à jour ; une archive récupérée plus tôt ne peut pas
+écraser une révision récupérée plus récemment. Les contraintes vérifient les dates,
+la consommation, le périmètre et la provenance vers `pipeline_runs`.
 
-La transformation :
+L'Excel final est écrit en continu, **après validation de la transaction et relecture
+en SQL**, pour les instants de cette exécution. La base conserve les instants des
+exécutions précédentes. Si l'export échoue après le chargement, relancer `load`
+régénère l'Excel sans créer de doublons. DuckDB utilise un budget de buffers de
+256 Mo et deux threads ; ce budget ne représente pas toute la RAM du processus.
 
-- conserve uniquement les consommations mesurées du périmètre France ; les lignes
-  de prévision sans consommation restent dans les données brutes ;
-- valide les dates avec fuseau, les valeurs numériques finies et la consommation
-  positive ou nulle ; une mesure invalide arrête le traitement avant SQL ;
-- conserve les valeurs manquantes sous forme de valeurs nulles ;
-- garde les échanges signés et le pompage tels que fournis ;
-- déduplique les lignes identiques et rejette les mesures contradictoires au même instant ;
-- calcule la production totale à partir des huit filières principales, sans ajouter
-  de nouveau leurs sous-filières ; si une filière manque, le total reste nul ;
-- écrit les résultats en Parquet et les compteurs dans `quality.json`.
+## Étapes séparées
 
-Le chargement SQL s'effectue dans une transaction. La clé primaire est
-`(date_heure_utc, perimetre)` ; les corrections RTE mettent les lignes à jour sans
-doublon. Une archive récupérée plus tôt ne peut pas remplacer une révision récupérée
-plus récemment. `pipeline_runs` conserve les chargements réussis et leur origine.
-L'Excel `consommation_sql.xlsx` est produit **après chargement et relecture en base**,
-sur les instants concernés par cette exécution. La base conserve aussi les mesures
-des exécutions précédentes. Si l'export Excel échoue après la transaction SQL,
-relancer l'étape `load` régénère l'export sans créer de doublons.
+```powershell
+.venv\Scripts\python app.py ingest --days 7
+.venv\Scripts\python app.py transform --raw data/raw/SNAPSHOT --batch-size 500
+.venv\Scripts\python app.py load --processed data/processed/SNAPSHOT --batch-size 500
+.venv\Scripts\python app.py analyze
+```
 
-Les requêtes de consultation sont dans [sql/analyses.sql](sql/analyses.sql).
+Remplacer `SNAPSHOT` par le nom affiché lors de la collecte. Les étapes complètes
+peuvent être relancées ; une transformation existante est vérifiée et réutilisée.
+Le lot Parquet d'origine ne change pas lors d'une réutilisation.
+
+## Analyses SQL et index
+
+[sql/analyses.sql](sql/analyses.sql) contient sept analyses :
+
+1. Dernières mesures disponibles.
+2. Statistiques journalières avec `GROUP BY`.
+3. Évolution entre journées disponibles avec CTE et `LAG`.
+4. Trois pointes par jour avec `ROW_NUMBER`.
+5. Moyenne glissante sur quatre mesures disponibles.
+6. Provenance des mesures avec `LEFT JOIN`.
+7. Mix journalier sur les instants où toutes les filières sont disponibles.
+
+Les requêtes ne comblent pas les trous et ne présentent pas les MW comme des MWh.
+Quatre mesures disponibles ne constituent pas toujours une heure complète.
+
+L'index défini dans [sql/002_indexes.sql](sql/002_indexes.sql) cible
+`consommation_mw`. Le benchmark recherche le nombre de mesures et les bornes
+temporelles correspondant à une puissance précise, ici la puissance maximale
+observée. Il compare la même requête avant et après création de cet index, vérifie
+des résultats identiques, enregistre les deux plans **EXPLAIN ANALYZE**, et mesure
+la médiane de 31 exécutions après trois échauffements.
+
+Le rapport indique si le moteur a effectivement choisi un **Index Scan**.
+Un ratio avant/après supérieur à 1 indique un gain ; inférieur à 1, un ralentissement.
+Sur quelques milliers de lignes, les coûts fixes peuvent masquer le gain ou rendre
+l'index moins rapide. Le rapport conserve le résultat réel, sans promettre de gain.
+Seul l'index nommé par ce projet est recréé pendant cette mesure.
+
+## Dépôt manuel sur Hugging Face
+
+Préparer le dossier à déposer :
+
+```powershell
+.venv\Scripts\python app.py prepare-hub --processed data/processed/SNAPSHOT
+```
+
+Le dossier affiché contient le Parquet, un `README.md` qui sert de Dataset Card
+et un fichier de provenance sans chemins personnels. Cette commande reste locale
+et ne demande aucun token. Elle protège les fichiers déjà préparés et une carte
+modifiée à la main contre l'écrasement.
+
+Sur Hugging Face, créer un dépôt de type **Dataset**, privé pendant le développement,
+puis déposer le contenu du dossier préparé en conservant le sous-dossier `data/`.
+La [documentation officielle du dépôt manuel](https://huggingface.co/docs/hub/datasets-adding)
+décrit l'ajout des fichiers dans l'onglet « Files and versions ».
+
+Après le dépôt, créer le tag **v1.0.0** sur le dépôt Hugging Face pour figer cette
+version. Les [tags du Hub](https://huggingface.co/docs/huggingface_hub/guides/repository#branches-and-tags)
+désignent une révision du dépôt ; écrire « v1.0.0 » dans une carte ne crée pas ce tag.
+Le script de publication automatique prévu dans le PDF est remplacé ici par la
+préparation locale et le dépôt manuel, conformément au choix demandé.
 
 ## Dataset Card
 
-| Propriété | Description |
+La [carte complète générée](scripts/publish/dataset_card.md) documente la source,
+la licence, le schéma, les dates réelles, les volumes, le nettoyage, les limites
+et les empreintes. Elle est remplie à partir du snapshot lors de `prepare-hub`.
+
+| Élément | Description |
 | --- | --- |
-| Producteur | RTE, distribution via Open Data Réseaux Énergies |
-| Source | `eco2mix-national-tr`, API Explore v2.1 |
-| Périmètre | France, données nationales |
+| Producteur | RTE, distribution via ODRÉ |
+| Jeu source | `eco2mix-national-tr`, API Explore v2.1 |
+| Périmètre | France, national |
 | Fréquence source | Quart d'heure pour la consommation et les filières principales |
-| Licence | Licence Ouverte 2.0 / Etalab ; citer RTE et la date de collecte |
-| Nature | Télémesures, forfaits et estimations provisoires, susceptibles de correction |
-| Usage | Analyse descriptive de la consommation et du mix électrique |
-| Format nettoyé | Parquet, une ligne par instant UTC et périmètre |
+| Licence | Licence Ouverte 2.0 / Etalab, attribution RTE et date de collecte |
+| Données | Télémesures, forfaits et estimations provisoires |
+| Sortie | Parquet, une ligne par instant UTC et périmètre |
+| Unités | MW et gCO₂/kWh pour l'intensité carbone |
+| Limites | Dernier jour incomplet, trous possibles, révisions et historique limité |
 
-### Dictionnaire des colonnes nettoyées
-
-| Colonne | Type | Description |
-| --- | --- | --- |
-| `date_heure_utc` | texte ISO 8601 avec `+00:00` | Instant de mesure, clé temporelle |
-| `date_heure_paris` | texte ISO 8601 avec décalage | Heure française, changement d'heure pris en compte |
-| `perimetre` | texte | `France` |
-| `nature` | texte | Nature fournie par RTE |
-| `consommation_mw` | réel obligatoire | Puissance électrique consommée en MW |
-| `prevision_j1_mw`, `prevision_j_mw` | réels nullable | Prévisions de consommation |
-| `fioul_mw`, `charbon_mw`, `gaz_mw`, `nucleaire_mw` | réels nullable | Puissances des filières thermiques |
-| `eolien_mw`, `solaire_mw`, `hydraulique_mw`, `bioenergies_mw` | réels nullable | Puissances des autres filières |
-| `pompage_mw` | réel nullable | Valeur signée fournie par RTE |
-| `echanges_physiques_mw` | réel nullable | Échanges physiques, signe source conservé |
-| `taux_co2_g_kwh` | réel nullable | Intensité carbone en gCO₂/kWh |
-| `production_totale_mw` | réel nullable | Somme des huit filières principales |
-| `source_dataset` | texte | Identifiant du jeu source |
-
-La table SQL ajoute `source_retrieved_at` et `run_id` pour tracer la provenance.
-Les MW mesurent une **puissance**, pas une énergie en MWh : le pipeline ne calcule
-pas d'énergie en intégrant les mesures. Il ne comble pas les trous et n'interpole
-aucune mesure. Les sous-filières détaillées restent accessibles dans l'Excel et les
-JSON bruts. L'archive conserve les champs sources supplémentaires sans les ajouter
-automatiquement au schéma SQL.
-
-Le jeu temps réel couvre plusieurs mois et n'est pas une archive historique complète.
-Pour des analyses historiques, consulter le [jeu consolidé et définitif RTE](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/).
+Les horodatages Parquet sont des textes ISO 8601 avec décalage explicite. Les mesures
+sont des doubles, nullables sauf la consommation. Les MW mesurent une puissance ;
+le pipeline n'intègre pas d'énergie en MWh et n'interpole aucune valeur manquante.
+Pour un historique consolidé, consulter le [jeu RTE consolidé et définitif](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/).
 Le portail annonce un rafraîchissement toutes les quinze minutes et un quota de
-50 000 appels API par utilisateur et par mois : éviter des relances excessives.
+50 000 appels par utilisateur et par mois.
 
-## Vérifications
+## Configuration
+
+Les valeurs par défaut fonctionnent sans fichier `.env`. Pour les modifier :
+
+```powershell
+Copy-Item .env.example .env
+```
+
+| Variable | Défaut | Rôle |
+| --- | --- | --- |
+| `RTE_API_BASE` | API publique ODRÉ v2.1 | Adresse du catalogue |
+| `RTE_DATASET` | `eco2mix-national-tr` | Jeu source |
+| `DATA_DIR` | `data` | Racine des archives et résultats |
+| `DATABASE_PATH` | `data/electricity.duckdb` | Base DuckDB |
+| `BATCH_SIZE` | `1000` | Lignes par lot |
+
+Les chemins d'environnement relatifs sont résolus depuis la racine du dépôt.
+`--database` et `--output` acceptent aussi des chemins relatifs au dossier de lancement.
+En l'absence de `DATABASE_PATH`, la base est créée dans `DATA_DIR`.
+L'ancien réglage `SQLITE_PATH` est remplacé par `DATABASE_PATH`.
+
+Le dossier `data/` entier et les secrets sont exclus de Git. Les dépendances de
+publication Hugging Face ne sont pas nécessaires à l'exécution du projet.
+
+## Tests et résultats mesurés
 
 ```powershell
 .venv\Scripts\python -m pytest -q
@@ -195,15 +284,23 @@ Le portail annonce un rafraîchissement toutes les quinze minutes et un quota de
 .venv\Scripts\python -m ruff format --check .
 ```
 
-Les 23 tests utilisent une API simulée et des bases temporaires : pagination, reprises,
-échecs de collecte, changement d'heure, validation, déduplication, upsert, rollback,
-export SQL et intégrité des archives sur toute la chaîne. Une CI GitHub Actions
-exécute ces contrôles sous Windows et Linux ; aucun appel RTE réel dans les tests.
+**40 tests** couvrent un serveur HTTP local, la pagination, la concurrence bornée,
+les reprises exponentielles, les timeouts, les checkpoints, les verrouillages
+Windows, les changements d'heure, les doublons entre lots, les schémas nullables,
+la transaction et le rollback entre lots, les exports, les sept analyses, l'index,
+le lancement complet de la commande et la préparation locale du dataset.
+La CI GitHub Actions exécute les tests sous Windows et Linux, sans appel réel à RTE.
 
-Première exécution réelle vérifiée le **3 novembre 2026**, sur la période française
-du **28 octobre au 3 novembre inclus** : 672 lignes brutes, 54 lignes sans consommation
-mesurée, 618 mesures chargées dans SQLite et relues dans l'Excel final.
+Exécution réelle vérifiée le **3 novembre 2026**, sur 60 jours du **5 septembre au
+3 novembre inclus** : **5 760 lignes brutes**, **52 lignes sans consommation mesurée**,
+**5 708 mesures chargées** et des lots de **500 lignes**.
 
-Les exports, la base locale et les secrets sont exclus de Git. Ils restent disponibles
-dans le dossier `data/` de cette machine et sont régénérés par la commande `run`.
-Le prototype `app.py` d'origine est conservé dans le premier commit `e8f8e17`.
+`pipeline_report.json` contient les durées et pics RSS de chaque étape, les volumes
+bruts et Parquet, et l'indication d'une transformation réutilisée.
+Les pics RSS concernent le processus entier et sont échantillonnés toutes les 20 ms ;
+ils incluent les bibliothèques et caches. Les durées d'une reprise concernent cette
+invocation, pas les tentatives précédentes. Les résultats de l'index et ses plans
+sont dans `analysis_report.json` et `index_explain_analyze.txt`.
+
+Les anciennes données restent sur la machine. Le prototype initial `app.py` est
+conservé dans le premier commit `e8f8e17`.
