@@ -4,16 +4,16 @@ import argparse
 import asyncio
 import json
 import logging
-import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
 
 import aiohttp
+import duckdb
 
 from scripts.config import Settings
 from scripts.ingest.rte import ingest
-from scripts.load.sqlite import load_processed
+from scripts.load.database import load_processed
 from scripts.transform.clean import transform_archive
 
 
@@ -39,7 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     load = commands.add_parser("load", help="Charger un Parquet existant et exporter depuis SQL")
     load.add_argument("--processed", type=Path, required=True)
     for command in (run, load):
-        command.add_argument("--database", type=Path, help="Chemin SQLite (défaut : configuration)")
+        command.add_argument("--database", type=Path, help="Chemin DuckDB (défaut : configuration)")
+    for command in (run, clean, load):
+        command.add_argument("--batch-size", type=int, help="Lignes par lot (défaut : 1000)")
     return parser
 
 
@@ -66,15 +68,19 @@ def main(argv: list[str] | None = None) -> None:
             result["raw_excel"] = str(raw / "brut.xlsx")
         if args.command in ("run", "transform"):
             raw = raw if args.command == "run" else args.raw.resolve()
-            processed = transform_archive(raw, settings.data_dir / "processed")
+            processed = transform_archive(
+                raw, settings.data_dir / "processed", args.batch_size or settings.batch_size
+            )
             result["processed"] = str(processed)
             result["parquet"] = str(processed / "consommation.parquet")
         if args.command in ("run", "load"):
             processed = processed if args.command == "run" else args.processed.resolve()
             database = (args.database or settings.database).resolve()
-            result["sql_excel"] = str(load_processed(processed, database))
+            result["sql_excel"] = str(
+                load_processed(processed, database, args.batch_size or settings.batch_size)
+            )
             result["database"] = str(database)
-    except (ValueError, OSError, aiohttp.ClientError, TimeoutError, sqlite3.Error, KeyError) as exc:
+    except (ValueError, OSError, aiohttp.ClientError, TimeoutError, duckdb.Error, KeyError) as exc:
         parser.exit(1, f"Échec du pipeline : {exc}\n")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

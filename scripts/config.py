@@ -12,11 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = ROOT / "data"
-    database: Path = ROOT / "data/electricity.sqlite"
+    database: Path = ROOT / "data/electricity.duckdb"
     api_base: str = "https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets"
     dataset: str = "eco2mix-national-tr"
     concurrency: int = 4
     retries: int = 3
+    batch_size: int = 1000
 
     @property
     def records_url(self) -> str:
@@ -25,9 +26,10 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         load_dotenv(ROOT / ".env")
-        database = Path(os.getenv("SQLITE_PATH", "data/electricity.sqlite"))
+        database = Path(os.getenv("DATABASE_PATH", "data/electricity.duckdb"))
         return cls(
             database=database if database.is_absolute() else ROOT / database,
             api_base=os.getenv("RTE_API_BASE", cls.api_base),
             dataset=os.getenv("RTE_DATASET", cls.dataset),
+            batch_size=int(os.getenv("BATCH_SIZE", "1000")),
         )

@@ -1,17 +1,17 @@
 import hashlib
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 from datetime import date
 
+import duckdb
 import pandas as pd
 import pytest
 
 from scripts.archive import iter_records
 from scripts.ingest.rte import ingest
-from scripts.load.sqlite import load_processed
+from scripts.load.database import load_processed
 from scripts.transform.clean import transform_archive
 
 
@@ -51,7 +51,7 @@ async def test_end_to_end_and_raw_is_never_modified(tmp_path, api):
     assert len(pd.read_excel(raw / "brut.xlsx")) == 2
     assert len(pd.read_parquet(processed / "consommation.parquet")) == 1
     assert len(pd.read_excel(excel)) == 1
-    with sqlite3.connect(settings.database) as connection:
+    with duckdb.connect(str(settings.database)) as connection:
         assert connection.execute(
             "SELECT consommation_mw FROM electricity_consumption"
         ).fetchone() == (40000,)
