@@ -1,6 +1,9 @@
 import hashlib
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import date
 
@@ -12,6 +15,17 @@ from scripts.config import Settings
 from scripts.ingest.rte import ingest
 from scripts.load.sqlite import load_processed
 from scripts.transform.clean import read_archive, transform_archive
+
+
+def test_cli_help_works_with_windows_console_encoding():
+    result = subprocess.run(
+        [sys.executable, "app.py", "--help"],
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("cp1252")
+    assert "Pipeline RTE" in result.stdout.decode("cp1252")
 
 
 async def test_end_to_end_and_raw_is_never_modified(tmp_path):

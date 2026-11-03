@@ -19,7 +19,7 @@ from scripts.transform.clean import transform_archive
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Pipeline RTE : API → Excel → Parquet → SQL → Excel"
+        description="Pipeline RTE : API > Excel > Parquet > SQL > Excel"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="Exécuter toute la chaîne")
