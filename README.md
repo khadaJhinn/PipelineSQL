@@ -17,6 +17,8 @@ Le code est versionné sur GitHub et les données sont destinées à un dépôt
 **Dataset Hugging Face**. Le programme prépare le Parquet et sa carte de données.
 Le périmètre retenu couvre le rendu technique, sans oral.
 
+Dépôt des données : [consommation-electrique-france-rte sur Hugging Face](https://huggingface.co/datasets/teom1313/consommation-electrique-france-rte).
+
 Source par défaut : [RTE / ODRÉ, éCO2mix national consolidé et définitif](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/).
 Les données sources sont sous Licence Ouverte 2.0 / Etalab, avec attribution à RTE.
 Les puissances sont en **MW**. La consommation historique est mesurée à la
