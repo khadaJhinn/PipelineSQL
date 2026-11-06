@@ -13,13 +13,15 @@ tags:
 Pipeline reproductible : **API RTE → JSON Lines et Excel brut → transformation par
 lots → Parquet → base SQL DuckDB → Excel relu depuis SQL → analyses SQL**.
 
-La publication sur Hugging Face est réalisée **manuellement**, selon le choix retenu
-pour ce projet. Le programme prépare les fichiers à déposer. Le périmètre retenu
-couvre le rendu technique, sans oral.
+Le code est versionné sur GitHub et les données sont destinées à un dépôt
+**Dataset Hugging Face**. Le programme prépare le Parquet et sa carte de données.
+Le périmètre retenu couvre le rendu technique, sans oral.
 
-Source : [RTE / ODRÉ, éCO2mix national temps réel](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/).
+Source par défaut : [RTE / ODRÉ, éCO2mix national consolidé et définitif](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/).
 Les données sources sont sous Licence Ouverte 2.0 / Etalab, avec attribution à RTE.
-Les puissances sont en **MW**, les données temps réel sont provisoires.
+Les puissances sont en **MW**. La consommation historique est mesurée à la
+demi-heure ; les prévisions sont au quart d'heure. Les données consolidées peuvent
+encore être révisées avant de devenir définitives.
 
 ## Lancer le projet
 
@@ -30,12 +32,14 @@ Depuis le dossier PipelineSQL, dans PowerShell :
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-dev.txt
 
-# Pipeline complet sur les 7 derniers jours disponibles.
-.venv\Scripts\python app.py run --days 7
+# Pipeline complet sur les 1095 derniers jours disponibles (environ trois ans).
+.venv\Scripts\python app.py run
 ```
 
 Python 3.11 ou plus récent est nécessaire. Aucune clé d'API n'est nécessaire pour
-cette source publique. Sans argument, `python app.py` lance également sept jours.
+cette source publique. Sans argument, `python app.py` lance également 1095 jours.
+La collecte se termine au dernier jour mesuré de la source, qui peut être antérieur
+à la date du jour en raison du délai de consolidation.
 La dernière date est déterminée à partir des consommations mesurées, en excluant
 les prévisions futures sans mesure.
 
@@ -43,18 +47,29 @@ Les chemins des fichiers sont affichés à la fin. Pour une nouvelle collecte de
 mêmes dates, y compris les corrections RTE, utiliser `--refresh` :
 
 ```powershell
-.venv\Scripts\python app.py run --days 60 --batch-size 500 --refresh
+.venv\Scripts\python app.py run --days 1095 --batch-size 1000 --refresh
 ```
 
 Une période explicite utilise des dates françaises, début inclus et fin **exclue** :
 
 ```powershell
-.venv\Scripts\python app.py run --start 2026-09-05 --end 2026-11-04
+.venv\Scripts\python app.py run --start 2023-09-02 --end 2026-09-01
 ```
 
-Cette période couvre le 5 septembre au 3 novembre inclus. Le dernier jour peut
-être incomplet. Une période contient au maximum 366 jours, dans la limite des
-données effectivement disponibles dans le jeu temps réel.
+Cette période couvre le 2 septembre 2023 au 31 août 2026 inclus. Le dernier jour
+peut être incomplet. Une période contient au maximum **7320 jours**, dans la limite
+des données effectivement disponibles auprès de RTE. Les bornes réelles et le
+nombre de mesures sont inscrits dans la carte du dataset.
+
+Pour une collecte récente au quart d'heure, choisir explicitement la source temps
+réel, dont l'historique disponible est beaucoup plus court :
+
+```powershell
+.venv\Scripts\python app.py run --dataset eco2mix-national-tr --days 60
+```
+
+`--dataset` prend le pas sur `RTE_DATASET`. Pour reprendre un ancien checkpoint
+avec une autre source, préciser également le `--dataset` correspondant.
 
 ## Les fichiers produits
 
@@ -106,7 +121,8 @@ conservées** ; les nouvelles exécutions utilisent DuckDB, qui permet
 ## Ingestion et reprise
 
 La collecte utilise **aiohttp**, un timeout total de 30 secondes et un sémaphore
-limitant la concurrence à quatre requêtes. La pagination traite 100 lignes par page
+limitant la concurrence à quatre requêtes. Le nombre de tâches de collecte reste
+aussi borné à quatre, même sur plusieurs années. La pagination traite 100 lignes par page
 sur des fenêtres journalières françaises, y compris aux changements d'heure.
 Les erreurs réseau, timeouts et HTTP 408, 429, 500, 502, 503, 504 sont réessayés
 trois fois avec attente exponentielle. Les autres erreurs HTTP arrêtent la collecte.
@@ -146,6 +162,11 @@ restent dans le brut. Les valeurs manquantes restent nulles, les échanges et le
 pompage conservent leur signe. Les doublons identiques sont supprimés et les
 mesures contradictoires arrêtent la transformation.
 
+Dans le jeu historique, les champs `date` et `heure` peuvent désigner des heures
+françaises inexistantes au passage à l'heure d'été. Ces mesures sont écartées et
+comptées dans `invalid_local_time_rows`, sans déplacer leur horodatage. Elles restent
+dans le brut. Les deux occurrences réelles de l'heure d'automne restent distinctes.
+
 La production totale additionne les huit filières principales. Les sous-filières
 ne sont pas additionnées de nouveau ; si une filière manque, le total reste nul.
 Les champs sources supplémentaires restent disponibles dans le brut.
@@ -165,7 +186,7 @@ régénère l'Excel sans créer de doublons. DuckDB utilise un budget de buffers
 ## Étapes séparées
 
 ```powershell
-.venv\Scripts\python app.py ingest --days 7
+.venv\Scripts\python app.py ingest --days 1095
 .venv\Scripts\python app.py transform --raw data/raw/SNAPSHOT --batch-size 500
 .venv\Scripts\python app.py load --processed data/processed/SNAPSHOT --batch-size 500
 .venv\Scripts\python app.py analyze
@@ -236,21 +257,21 @@ et les empreintes. Elle est remplie à partir du snapshot lors de `prepare-hub`.
 | Élément | Description |
 | --- | --- |
 | Producteur | RTE, distribution via ODRÉ |
-| Jeu source | `eco2mix-national-tr`, API Explore v2.1 |
+| Jeu source par défaut | `eco2mix-national-cons-def`, API Explore v2.1 |
 | Périmètre | France, national |
-| Fréquence source | Quart d'heure pour la consommation et les filières principales |
+| Fréquence source | Demi-heure pour la consommation et les filières, quart d'heure pour les prévisions |
 | Licence | Licence Ouverte 2.0 / Etalab, attribution RTE et date de collecte |
-| Données | Télémesures, forfaits et estimations provisoires |
+| Données | Comptages consolidés et définitifs, complétés par des forfaits |
 | Sortie | Parquet, une ligne par instant UTC et périmètre |
 | Unités | MW et gCO₂/kWh pour l'intensité carbone |
-| Limites | Dernier jour incomplet, trous possibles, révisions et historique limité |
+| Limites | Délai de consolidation, trous possibles, révisions des données consolidées |
 
 Les horodatages Parquet sont des textes ISO 8601 avec décalage explicite. Les mesures
 sont des doubles, nullables sauf la consommation. Les MW mesurent une puissance ;
 le pipeline n'intègre pas d'énergie en MWh et n'interpole aucune valeur manquante.
-Pour un historique consolidé, consulter le [jeu RTE consolidé et définitif](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/).
-Le portail annonce un rafraîchissement toutes les quinze minutes et un quota de
-50 000 appels par utilisateur et par mois.
+Le pipeline utilise par défaut le [jeu RTE consolidé et définitif](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/),
+rafraîchi quotidiennement. La source temps réel est rafraîchie toutes les quinze
+minutes et annonce un quota de 50 000 appels par utilisateur et par mois.
 
 ## Configuration
 
@@ -263,7 +284,7 @@ Copy-Item .env.example .env
 | Variable | Défaut | Rôle |
 | --- | --- | --- |
 | `RTE_API_BASE` | API publique ODRÉ v2.1 | Adresse du catalogue |
-| `RTE_DATASET` | `eco2mix-national-tr` | Jeu source |
+| `RTE_DATASET` | `eco2mix-national-cons-def` | Jeu source |
 | `DATA_DIR` | `data` | Racine des archives et résultats |
 | `DATABASE_PATH` | `data/electricity.duckdb` | Base DuckDB |
 | `BATCH_SIZE` | `1000` | Lignes par lot |
@@ -284,16 +305,22 @@ publication Hugging Face ne sont pas nécessaires à l'exécution du projet.
 .venv\Scripts\python -m ruff format --check .
 ```
 
-**40 tests** couvrent un serveur HTTP local, la pagination, la concurrence bornée,
+**46 tests** couvrent un serveur HTTP local, la pagination, la concurrence bornée,
 les reprises exponentielles, les timeouts, les checkpoints, les verrouillages
 Windows, les changements d'heure, les doublons entre lots, les schémas nullables,
 la transaction et le rollback entre lots, les exports, les sept analyses, l'index,
 le lancement complet de la commande et la préparation locale du dataset.
 La CI GitHub Actions exécute les tests sous Windows et Linux, sans appel réel à RTE.
 
-Exécution réelle vérifiée le **3 novembre 2026**, sur 60 jours du **5 septembre au
-3 novembre inclus** : **5 760 lignes brutes**, **52 lignes sans consommation mesurée**,
-**5 708 mesures chargées** et des lots de **500 lignes**.
+Exécution historique vérifiée le **6 novembre 2026**, sur **1095 jours du
+2 septembre 2023 au 31 août 2026 inclus** : **105 120 lignes brutes**,
+**52 561 lignes sans consommation mesurée**, **6 mesures avec heure civile
+inexistante écartées**, **0 doublon** et **52 553 mesures chargées**, par lots de
+**1000 lignes**. Le Parquet fait **2 296 368 octets**. Les sept analyses SQL et les
+exports Excel ont été exécutés sur la base enrichie.
+
+Le précédent lot temps réel du 3 novembre 2026 comptait **5 708 mesures** sur
+60 jours. Le nouveau dataset historique contient environ **9,2 fois** ce volume.
 
 `pipeline_report.json` contient les durées et pics RSS de chaque étape, les volumes
 bruts et Parquet, et l'indication d'une transformation réutilisée.

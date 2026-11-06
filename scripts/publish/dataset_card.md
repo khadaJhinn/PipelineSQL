@@ -21,19 +21,20 @@ Producteur : **RTE**. Distribution par Open Data Réseaux Énergies (ODRÉ).
 
 ## Source et licence
 
-[Jeu source éCO2mix national temps réel](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/).
+[Jeu source $source_name]($source_page).
 API utilisée : $source_url
 
 Les données sources sont sous [Licence Ouverte 2.0 / Etalab](https://www.etalab.gouv.fr/licence-ouverte-open-licence/).
-Attribution : **RTE / ODRÉ, éCO2mix national temps réel, collecte du $retrieved_at**.
+Attribution : **RTE / ODRÉ, $source_name, collecte du $retrieved_at**.
 Le nettoyage ne change pas la licence des données sources.
 
 ## Contenu et version
 
-- Version prévue pour le dépôt manuel : **v1.0.0**.
+- Version initiale prévue sur le Hub : **v1.0.0**.
 - Archive source : `$run_id`.
 - Lignes brutes collectées : **$raw_rows**.
 - Lignes sans consommation mesurée écartées : **$unmeasured_rows**.
+- Mesures avec heure civile source inexistante écartées : **$invalid_local_time_rows**.
 - Doublons identiques supprimés : **$duplicate_rows**.
 - Mesures nettoyées : **$clean_rows**.
 - Premier instant mesuré : **$first_utc**.
@@ -79,11 +80,16 @@ Destiné à l'analyse descriptive de la consommation et du mix électrique en Fr
 Les MW mesurent une puissance, pas une énergie en MWh. Aucune intégration d'énergie,
 interpolation ou imputation des valeurs manquantes n'est effectuée.
 
-Les données temps réel proviennent de télémesures, forfaits et estimations ; elles
-sont provisoires et peuvent être corrigées. Le dernier jour peut être incomplet,
-des mesures peuvent manquer et l'historique du jeu temps réel est limité.
+$source_description
+
+Le dernier jour peut être incomplet et des mesures peuvent manquer. La période
+demandée peut dépasser l'historique disponible : les bornes réelles ci-dessus font foi.
 Les doublons temporels du changement d'heure restent distincts grâce à l'UTC.
-Ce jeu n'est pas un service de prévision ni une archive définitive exhaustive.
+Pour la source historique, les mesures dont les champs `date` et `heure` désignent
+une heure française inexistante au passage à l'heure d'été sont exclues et comptées
+séparément. Ces lignes restent dans l'archive brute ; elles ne sont pas déplacées
+sur une autre heure. Les doublons contradictoires restants arrêtent le traitement.
+Ce jeu est destiné à l'analyse descriptive ; il ne garantit pas un historique exhaustif.
 
 ## Provenance et reproductibilité
 
@@ -94,4 +100,4 @@ personnel n'est nécessaire à l'utilisation de ce dataset.
 SHA-256 du Parquet : `$parquet_sha256`.
 
 Code du pipeline : [PipelineSQL sur GitHub](https://github.com/khadaJhinn/PipelineSQL).
-La préparation est locale ; la publication et le tag sur le Hub sont réalisés manuellement.
+La préparation est locale ; le dossier produit est ensuite publié sur le Hub.

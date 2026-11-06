@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import sys
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import aiohttp
 import duckdb
 
 from scripts.analyze import analyze
-from scripts.config import Settings
+from scripts.config import DEFAULT_DAYS, Settings
 from scripts.ingest.rte import ingest
 from scripts.load.database import load_processed
 from scripts.metrics import measure
@@ -33,7 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--end", type=date.fromisoformat, help="Dernier jour français EXCLU")
         command.add_argument(
-            "--days", type=int, default=7, help="Défaut : 7 derniers jours mesurés"
+            "--days", type=int, default=DEFAULT_DAYS, help="Défaut : 1095 derniers jours mesurés"
+        )
+        command.add_argument(
+            "--dataset",
+            choices=("eco2mix-national-cons-def", "eco2mix-national-tr"),
+            help="Source RTE (défaut : historique consolidé, ou RTE_DATASET)",
         )
         command.add_argument("--refresh", action="store_true", help="Créer un nouveau snapshot")
         command.add_argument("--resume", type=Path, help="Reprendre un checkpoint JSON")
@@ -61,6 +67,8 @@ def main(argv: list[str] | None = None) -> None:
     result = {}
     try:
         settings = Settings.from_env()
+        if getattr(args, "dataset", None):
+            settings = replace(settings, dataset=args.dataset)
         batch_size = getattr(args, "batch_size", None)
         batch_size = settings.batch_size if batch_size is None else batch_size
         if batch_size < 1:

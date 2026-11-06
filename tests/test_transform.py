@@ -28,7 +28,13 @@ def test_mw_totals_nulls_forecasts_and_duplicates():
     frame, report = transform_records(
         [row, row, measurement(consommation=None)], "eco2mix-national-tr"
     )
-    assert report == {"raw_rows": 3, "unmeasured_rows": 1, "duplicate_rows": 1, "clean_rows": 1}
+    assert report == {
+        "raw_rows": 3,
+        "unmeasured_rows": 1,
+        "invalid_local_time_rows": 0,
+        "duplicate_rows": 1,
+        "clean_rows": 1,
+    }
     assert frame.iloc[0]["production_totale_mw"] == sum(frame.iloc[0][PRODUCTION])
     assert frame.iloc[0]["production_totale_mw"] == 40330
     assert frame.iloc[0]["echanges_physiques_mw"] == -1200
@@ -68,3 +74,24 @@ def test_conflicting_duplicates_are_rejected():
 def test_missing_production_is_not_zero():
     frame, _ = transform_records([measurement(nucleaire=None)], "test")
     assert frame["production_totale_mw"].isna().all()
+
+
+def test_historical_nonexistent_spring_hour_is_counted_and_valid_measure_kept():
+    invalid = measurement(
+        date="2026-03-29", heure="02:30", date_heure="2026-03-29T01:30:00+00:00", consommation=1
+    )
+    valid = {**invalid, "heure": "03:30", "consommation": 42000}
+    frame, report = transform_records([invalid, valid], "eco2mix-national-cons-def")
+    assert frame["consommation_mw"].tolist() == [42000]
+    assert report["invalid_local_time_rows"] == 1
+    assert report["duplicate_rows"] == 0
+
+
+def test_historical_repeated_autumn_hour_keeps_both_instants():
+    rows = [
+        measurement(date="2026-10-25", heure="02:30"),
+        measurement(date="2026-10-25", heure="02:30", date_heure="2026-10-25T01:30:00+00:00"),
+    ]
+    frame, report = transform_records(rows, "eco2mix-national-cons-def")
+    assert len(frame) == 2
+    assert report["invalid_local_time_rows"] == 0

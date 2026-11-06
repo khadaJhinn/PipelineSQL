@@ -8,6 +8,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
+from scripts.config import DEFAULT_DAYS, MAX_DAYS
 from scripts.ingest.rte import RteClient, day_bounds, ingest
 
 
@@ -165,3 +166,34 @@ async def test_corrupted_checkpoint_page_is_rejected(api):
     page.write_text("{}\n")
     with pytest.raises(ValueError, match="modifiée"):
         await ingest(api.settings, date(2026, 10, 1), date(2026, 10, 2))
+
+
+async def test_multiyear_collection_uses_historical_source_and_default_window(api):
+    def handler(request):
+        if request.query.get("order_by") == "date_heure DESC":
+            return web.json_response({"results": [{"date_heure": "2026-08-31T21:30:00+00:00"}]})
+        return web.json_response({"total_count": 1, "results": [{"consommation": 42}]})
+
+    api.handler = handler
+    run = await ingest(api.settings)
+    manifest = json.loads((run / "manifest.json").read_text())
+    assert manifest["dataset"] == "eco2mix-national-cons-def"
+    assert manifest["end_exclusive"] == "2026-09-01"
+    assert (
+        date.fromisoformat(manifest["end_exclusive"]) - date.fromisoformat(manifest["start"])
+    ).days == DEFAULT_DAYS
+    assert manifest["raw_rows"] == DEFAULT_DAYS
+
+
+@pytest.mark.parametrize("days", [0, MAX_DAYS + 1])
+async def test_invalid_window_fails_before_network_request(api, days):
+    with pytest.raises(ValueError, match="days"):
+        await ingest(api.settings, days=days)
+    assert not api.requests
+
+
+async def test_explicit_multiyear_range_is_supported(api):
+    api.handler = lambda request: web.json_response({"total_count": 0, "results": []})
+    with pytest.raises(ValueError, match="Aucune donnée"):
+        await ingest(api.settings, date(2024, 1, 1), date(2026, 1, 1))
+    assert len(api.requests) == 731

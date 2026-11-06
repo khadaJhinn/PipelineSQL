@@ -45,6 +45,9 @@ async def test_preparation_is_local_and_reproducible(api, tmp_path):
     assert "$" not in card
     assert "v1.0.0" in card
     assert "Mesures nettoyées : **1**" in card
+    assert "consolidé et définitif" in card
+    assert "demi-heure" in card
+    assert "eco2mix-national-cons-def/" in card
     assert str(tmp_path) not in card
     provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["clean_rows"] == 1

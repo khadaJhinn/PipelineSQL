@@ -32,16 +32,32 @@ def prepare_hub(processed: Path, output: Path) -> Path:
         last = max(last, bounds["max"]) if last else bounds["max"]
     if first is None:
         raise ValueError("Impossible de préparer un dataset vide.")
+    historical = manifest["dataset"] == "eco2mix-national-cons-def"
     values = {
         "run_id": processed.name,
         "source_url": manifest["source"],
         "source_dataset": manifest["dataset"],
+        "source_page": f"https://odre.opendatasoft.com/explore/dataset/{manifest['dataset']}/",
+        "source_name": (
+            "éCO2mix national consolidé et définitif" if historical else manifest["dataset"]
+        ),
+        "source_description": (
+            "Données consolidées et définitives issues des comptages, complétées par des "
+            "forfaits. La consommation et les filières sont mesurées à la demi-heure ; "
+            "les prévisions sont au quart d'heure. Les lignes intermédiaires sans "
+            "consommation mesurée sont exclues du Parquet."
+            if historical
+            else "Données temps réel issues de télémesures, forfaits et estimations, "
+            "au quart d'heure. Elles sont provisoires et peuvent être corrigées ; "
+            "l'historique de cette source est limité."
+        ),
         "retrieved_at": manifest["retrieved_at"],
         "start": manifest["start"],
         "end_exclusive": manifest["end_exclusive"],
         "first_utc": first,
         "last_utc": last,
         "parquet_sha256": digest,
+        "invalid_local_time_rows": quality.get("invalid_local_time_rows", 0),
         **{
             key: quality[key]
             for key in ("raw_rows", "unmeasured_rows", "duplicate_rows", "clean_rows")

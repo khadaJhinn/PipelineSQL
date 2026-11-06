@@ -7,6 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DAYS = 1095
+MAX_DAYS = 20 * 366
 
 
 @dataclass(frozen=True)
@@ -14,7 +16,7 @@ class Settings:
     data_dir: Path = ROOT / "data"
     database: Path = ROOT / "data/electricity.duckdb"
     api_base: str = "https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets"
-    dataset: str = "eco2mix-national-tr"
+    dataset: str = "eco2mix-national-cons-def"
     concurrency: int = 4
     retries: int = 3
     batch_size: int = 1000

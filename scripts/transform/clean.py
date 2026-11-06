@@ -51,6 +51,24 @@ COLUMNS = [
     "production_totale_mw",
     "source_dataset",
 ]
+PARIS = ZoneInfo("Europe/Paris")
+
+
+def nonexistent_source_time(record: dict, dataset: str) -> bool:
+    """RTE historique peut fournir des heures civiles inexistantes au printemps."""
+    if dataset != "eco2mix-national-cons-def" or not record.get("date") or not record.get("heure"):
+        return False
+    local = datetime.fromisoformat(f"{record['date']}T{record['heure']}")
+    if local.tzinfo is not None:
+        raise ValueError("Les champs date et heure source doivent être des heures civiles.")
+    return all(
+        local.replace(tzinfo=PARIS, fold=fold)
+        .astimezone(UTC)
+        .astimezone(PARIS)
+        .replace(tzinfo=None)
+        != local
+        for fold in (0, 1)
+    )
 
 
 def number(value, field: str) -> float | None:
@@ -72,12 +90,16 @@ def transform_records(
 ) -> tuple[pd.DataFrame, dict]:
     cleaned = []
     skipped = 0
+    invalid_local_times = 0
     for record in records:
         if record.get("perimetre") != "France":
             raise ValueError("Le jeu de données doit contenir uniquement le périmètre France.")
         # Les prévisions sans télémesure sont conservées dans l'archive brute.
         if record.get("consommation") is None:
             skipped += 1
+            continue
+        if nonexistent_source_time(record, dataset):
+            invalid_local_times += 1
             continue
         try:
             stamp = datetime.fromisoformat(record["date_heure"])
@@ -88,9 +110,9 @@ def transform_records(
         stamp = stamp.astimezone(UTC)
         row = {
             "date_heure_utc": stamp.isoformat(),
-            "date_heure_paris": stamp.astimezone(ZoneInfo("Europe/Paris")).isoformat(),
+            "date_heure_paris": stamp.astimezone(PARIS).isoformat(),
             "perimetre": "France",
-            "nature": record.get("nature") or "Données temps réel",
+            "nature": record.get("nature") or "Non renseignée",
             "source_dataset": dataset,
             **{target: number(record.get(source), source) for source, target in METRICS.items()},
         }
@@ -116,6 +138,7 @@ def transform_records(
     return frame, {
         "raw_rows": len(records),
         "unmeasured_rows": skipped,
+        "invalid_local_time_rows": invalid_local_times,
         "duplicate_rows": len(cleaned) - len(frame),
         "clean_rows": len(frame),
     }
@@ -151,6 +174,7 @@ def transform_archive(run_dir: Path, processed_root: Path, batch_size: int = 100
     report = {
         "raw_rows": 0,
         "unmeasured_rows": 0,
+        "invalid_local_time_rows": 0,
         "duplicate_rows": 0,
         "clean_rows": 0,
         "batch_size": batch_size,
@@ -172,7 +196,12 @@ def transform_archive(run_dir: Path, processed_root: Path, batch_size: int = 100
                     for batch in record_batches(iter_records(run_dir, manifest), batch_size):
                         frame, counters = transform_records(batch, manifest["dataset"], True)
                         report["max_batch_rows"] = max(report["max_batch_rows"], len(batch))
-                        for key in ("raw_rows", "unmeasured_rows", "duplicate_rows"):
+                        for key in (
+                            "raw_rows",
+                            "unmeasured_rows",
+                            "invalid_local_time_rows",
+                            "duplicate_rows",
+                        ):
                             report[key] += counters[key]
                         for row in frame.itertuples(index=False, name=None):
                             values = [None if pd.isna(value) else value for value in row]

@@ -12,7 +12,7 @@ import aiohttp
 from filelock import FileLock
 
 from scripts.archive import file_hash, iter_records, read_manifest
-from scripts.config import Settings
+from scripts.config import DEFAULT_DAYS, MAX_DAYS, Settings
 from scripts.excel import write_records_excel
 from scripts.files import atomic_json
 
@@ -144,14 +144,14 @@ async def ingest(
     settings: Settings,
     start: date | None = None,
     end: date | None = None,
-    days: int = 7,
+    days: int = DEFAULT_DAYS,
     client: aiohttp.ClientSession | None = None,
     refresh: bool = False,
     resume: Path | None = None,
 ) -> Path:
     """Même période = même snapshot ; --refresh en crée un nouveau, --resume le reprend."""
-    if not 1 <= days <= 366:
-        raise ValueError("days doit être compris entre 1 et 366.")
+    if not 1 <= days <= MAX_DAYS:
+        raise ValueError(f"days doit être compris entre 1 et {MAX_DAYS}.")
     if (start is None) != (end is None):
         raise ValueError("Fournir start et end ensemble.")
     if resume:
@@ -176,8 +176,8 @@ async def ingest(
     if start is None:
         end = await api.latest_measured_day() + timedelta(days=1)
         start = end - timedelta(days=days)
-    if not 1 <= (end - start).days <= 366:
-        raise ValueError("La période doit couvrir de 1 à 366 jours.")
+    if not 1 <= (end - start).days <= MAX_DAYS:
+        raise ValueError(f"La période doit couvrir de 1 à {MAX_DAYS} jours.")
     identity = f"{settings.records_url}|{start}|{end}"
     key = hashlib.sha256(identity.encode()).hexdigest()[:16]
     checkpoint_root = settings.data_dir / "checkpoints"
@@ -211,12 +211,19 @@ async def ingest(
             }
             save_state(checkpoint, state)
         run_dir = settings.data_dir / "raw" / state["run_id"]
-        tasks = [
-            asyncio.create_task(
-                api.collect_day(start + timedelta(days=i), run_dir, state, checkpoint)
-            )
-            for i in range((end - start).days)
-        ]
+        # Le nombre de tâches reste borné, même pour plusieurs années d'historique.
+        pending_days = iter(start + timedelta(days=i) for i in range((end - start).days))
+        completed_days = 0
+
+        async def worker():
+            nonlocal completed_days
+            for day in pending_days:
+                await api.collect_day(day, run_dir, state, checkpoint)
+                completed_days += 1
+                if completed_days % 30 == 0:
+                    LOGGER.info("Collecte : %d/%d jours", completed_days, (end - start).days)
+
+        tasks = [asyncio.create_task(worker()) for _ in range(settings.concurrency)]
         try:
             await asyncio.gather(*tasks)
             pages = sorted(state["pages"].values(), key=lambda page: page["file"])
